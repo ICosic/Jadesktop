@@ -62,63 +62,57 @@ SELECT
 
   mm.MEMBERSHIP_ID                                 AS "Membership_ID",
 
-  /* CORRECTED: Find the anniversary-based period start */
+  /* CORRECTED: Find the anniversary-based period start (LEAP-YEAR SAFE) */
   CASE
     WHEN mm.MEMBERSHIP_ID IS NOT NULL
          AND iui.CREATED_ON BETWEEN me.valid_from AND me.effective_to
     THEN
-      -- Build the anniversary date in CREATED_ON's year using day/month from valid_from
+      -- Calculate years difference, then use ADD_MONTHS to handle leap years
       CASE
-        -- If CREATED_ON is on/after the anniversary in its year, use that year's anniversary
-        WHEN iui.CREATED_ON >= TO_DATE(
-               TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-               TO_CHAR(me.valid_from, 'MMDD'),
-               'YYYYMMDD'
+        -- Calculate anniversary in CREATED_ON's year
+        WHEN iui.CREATED_ON >= ADD_MONTHS(
+               me.valid_from,
+               12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
              )
         THEN
-          TO_DATE(
-            TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-            TO_CHAR(me.valid_from, 'MMDD'),
-            'YYYYMMDD'
+          -- Use current year's anniversary
+          ADD_MONTHS(
+            me.valid_from,
+            12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
           )
-        -- Otherwise, CREATED_ON falls before the anniversary, use previous year's anniversary
         ELSE
-          TO_DATE(
-            TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON) - 1) || 
-            TO_CHAR(me.valid_from, 'MMDD'),
-            'YYYYMMDD'
+          -- Use previous year's anniversary
+          ADD_MONTHS(
+            me.valid_from,
+            12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from) - 1)
           )
       END
   END                                              AS "Membership_ValidFrom",
 
-  /* CORRECTED: Period end is 1 day before next anniversary, capped at effective_to */
+  /* CORRECTED: Period end is 1 day before next anniversary, capped at effective_to (LEAP-YEAR SAFE) */
   CASE
     WHEN mm.MEMBERSHIP_ID IS NOT NULL
          AND iui.CREATED_ON BETWEEN me.valid_from AND me.effective_to
     THEN
       LEAST(
-        -- Next anniversary minus 1 day
+        -- Next anniversary minus 1 day (using ADD_MONTHS for leap year safety)
         CASE
           -- If CREATED_ON is on/after the anniversary in its year
-          WHEN iui.CREATED_ON >= TO_DATE(
-                 TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-                 TO_CHAR(me.valid_from, 'MMDD'),
-                 'YYYYMMDD'
+          WHEN iui.CREATED_ON >= ADD_MONTHS(
+                 me.valid_from,
+                 12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
                )
           THEN
             -- Next anniversary is in the following year
-            TO_DATE(
-              TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON) + 1) || 
-              TO_CHAR(me.valid_from, 'MMDD'),
-              'YYYYMMDD'
+            ADD_MONTHS(
+              me.valid_from,
+              12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from) + 1)
             ) - 1
-          -- CREATED_ON is before the anniversary in its year
           ELSE
             -- Next anniversary is in the same year
-            TO_DATE(
-              TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-              TO_CHAR(me.valid_from, 'MMDD'),
-              'YYYYMMDD'
+            ADD_MONTHS(
+              me.valid_from,
+              12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
             ) - 1
         END,
         me.effective_to

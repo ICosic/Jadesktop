@@ -49,17 +49,33 @@ For a membership with a **100-year duration** that renews annually:
 
 ## The Corrected Solution
 
-### Step 1: Calculate the Anniversary Date in CREATED_ON's Year
+### Step 1: Calculate the Anniversary Date in CREATED_ON's Year (LEAP-YEAR SAFE)
+
+**⚠️ IMPORTANT:** Using string concatenation to build dates can fail with **February 29th** leap year dates!
 
 ```sql
+-- ❌ WRONG - Fails when valid_from is 2020-02-29 and trying to build 2023-02-29
 TO_DATE(
-  TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) ||  -- Get year from CREATED_ON
-  TO_CHAR(me.valid_from, 'MMDD'),                -- Get MMDD from VALID_FROM
+  TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
+  TO_CHAR(me.valid_from, 'MMDD'),
   'YYYYMMDD'
 )
 ```
 
-This constructs a date like: `2023` + `0315` = `2023-03-15`
+**✅ CORRECT:** Use `ADD_MONTHS` which handles leap years gracefully:
+
+```sql
+-- Calculate how many years to add from valid_from to CREATED_ON's year
+ADD_MONTHS(
+  me.valid_from,
+  12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
+)
+```
+
+**Oracle's `ADD_MONTHS` behavior with Feb 29:**
+- `2020-02-29` + 12 months = `2021-02-28` (Oracle handles non-leap years correctly!)
+- `2020-02-29` + 24 months = `2022-02-28`
+- `2020-02-29` + 48 months = `2024-02-29` (leap year again!)
 
 ### Step 2: Determine Which Anniversary Period
 
@@ -84,24 +100,22 @@ CASE
        AND iui.CREATED_ON BETWEEN me.valid_from AND me.effective_to
   THEN
     CASE
-      WHEN iui.CREATED_ON >= TO_DATE(
-             TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-             TO_CHAR(me.valid_from, 'MMDD'),
-             'YYYYMMDD'
+      -- Check if CREATED_ON is on/after the anniversary in its year
+      WHEN iui.CREATED_ON >= ADD_MONTHS(
+             me.valid_from,
+             12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
            )
       THEN
         -- Use current year's anniversary
-        TO_DATE(
-          TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-          TO_CHAR(me.valid_from, 'MMDD'),
-          'YYYYMMDD'
+        ADD_MONTHS(
+          me.valid_from,
+          12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
         )
       ELSE
         -- Use previous year's anniversary
-        TO_DATE(
-          TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON) - 1) || 
-          TO_CHAR(me.valid_from, 'MMDD'),
-          'YYYYMMDD'
+        ADD_MONTHS(
+          me.valid_from,
+          12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from) - 1)
         )
     END
 END
@@ -118,24 +132,21 @@ CASE
   THEN
     LEAST(
       CASE
-        WHEN iui.CREATED_ON >= TO_DATE(
-               TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-               TO_CHAR(me.valid_from, 'MMDD'),
-               'YYYYMMDD'
+        WHEN iui.CREATED_ON >= ADD_MONTHS(
+               me.valid_from,
+               12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
              )
         THEN
           -- Next anniversary is in the following year, minus 1 day
-          TO_DATE(
-            TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON) + 1) || 
-            TO_CHAR(me.valid_from, 'MMDD'),
-            'YYYYMMDD'
+          ADD_MONTHS(
+            me.valid_from,
+            12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from) + 1)
           ) - 1
         ELSE
           -- Next anniversary is in the same year, minus 1 day
-          TO_DATE(
-            TO_CHAR(EXTRACT(YEAR FROM iui.CREATED_ON)) || 
-            TO_CHAR(me.valid_from, 'MMDD'),
-            'YYYYMMDD'
+          ADD_MONTHS(
+            me.valid_from,
+            12 * (EXTRACT(YEAR FROM iui.CREATED_ON) - EXTRACT(YEAR FROM me.valid_from))
           ) - 1
       END,
       me.effective_to  -- Don't exceed the membership's closure date
@@ -181,6 +192,35 @@ END
 
 ✅ **Result:** Case falls at the start of current year's period
 
+## Leap Year Edge Case Handling
+
+### The Problem: ORA-01839
+
+If a membership starts on **February 29** in a leap year (e.g., 2020-02-29), attempting to construct that date in non-leap years will fail:
+
+```sql
+-- ❌ FAILS with ORA-01839
+TO_DATE('20230229', 'YYYYMMDD')  -- 2023 is not a leap year!
+```
+
+### The Solution: ADD_MONTHS
+
+Oracle's `ADD_MONTHS` function automatically handles leap year conversions:
+
+```sql
+-- ✅ Works correctly
+SELECT ADD_MONTHS(DATE '2020-02-29', 12) FROM DUAL;
+-- Returns: 2021-02-28 (Oracle adjusts to last day of February)
+
+SELECT ADD_MONTHS(DATE '2020-02-29', 48) FROM DUAL;
+-- Returns: 2024-02-29 (2024 is a leap year!)
+```
+
+**Key benefits:**
+- No manual date construction
+- Automatic leap year handling
+- Oracle-native date arithmetic
+
 ## Summary
 
 The fix ensures that:
@@ -189,6 +229,7 @@ The fix ensures that:
 2. ✅ The **year** is calculated based on which anniversary period contains `CREATED_ON`
 3. ✅ Membership periods are **one full year** (anniversary to day before next anniversary)
 4. ✅ Periods are **capped** at the membership's `effective_to` date
+5. ✅ **Leap year dates (Feb 29)** are handled correctly without ORA-01839 errors
 
 ## Files
 
